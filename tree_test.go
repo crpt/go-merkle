@@ -1,16 +1,21 @@
 package merkle
 
 import (
+	"crypto"
 	"encoding/hex"
 	"testing"
+	_ "unsafe"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tendermint/tendermint/crypto/tmhash"
-	ctest "github.com/tendermint/tendermint/internal/libs/test"
-	tmrand "github.com/tendermint/tendermint/libs/rand"
+	grand "github.com/daotl/guts/rand"
+
+	ctest "github.com/crpt/go-merkle/internal/test"
 )
+
+//go:linkname MutateByteSlice github.com/tendermint/tendermint/internal/libs/test.MutateByteSlice
+func MutateByteSlice(bytez []byte) []byte
 
 type testItem []byte
 
@@ -36,16 +41,17 @@ func TestHashFromByteSlices(t *testing.T) {
 	for name, tc := range testcases {
 		tc := tc
 		t.Run(name, func(t *testing.T) {
-			hash := HashFromByteSlices(tc.slices)
+			hash := HashFromByteSlices(crypto.SHA256, tc.slices)
 			assert.Equal(t, tc.expectHash, hex.EncodeToString(hash))
 		})
 	}
 }
 
 func TestProof(t *testing.T) {
+	hashFn := crypto.SHA256
 
 	// Try an empty proof first
-	rootHash, proofs := ProofsFromByteSlices([][]byte{})
+	rootHash, proofs := ProofsFromByteSlices(hashFn, [][]byte{})
 	require.Equal(t, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", hex.EncodeToString(rootHash))
 	require.Empty(t, proofs)
 
@@ -53,12 +59,12 @@ func TestProof(t *testing.T) {
 
 	items := make([][]byte, total)
 	for i := 0; i < total; i++ {
-		items[i] = testItem(tmrand.Bytes(tmhash.Size))
+		items[i] = testItem(grand.Bytes(hashFn.Size()))
 	}
 
-	rootHash = HashFromByteSlices(items)
+	rootHash = HashFromByteSlices(hashFn, items)
 
-	rootHash2, proofs := ProofsFromByteSlices(items)
+	rootHash2, proofs := ProofsFromByteSlices(hashFn, items)
 
 	require.Equal(t, rootHash, rootHash2, "Unmatched root hashes: %X vs %X", rootHash, rootHash2)
 
@@ -77,7 +83,7 @@ func TestProof(t *testing.T) {
 
 		// Trail too long should make it fail
 		origAunts := proof.Aunts
-		proof.Aunts = append(proof.Aunts, tmrand.Bytes(32))
+		proof.Aunts = append(proof.Aunts, grand.Bytes(32))
 		err = proof.Verify(rootHash, item)
 		require.Error(t, err, "Expected verification to fail for wrong trail length")
 
@@ -101,37 +107,40 @@ func TestProof(t *testing.T) {
 }
 
 func TestHashAlternatives(t *testing.T) {
+	hashFn := crypto.SHA256
 
 	total := 100
 
 	items := make([][]byte, total)
 	for i := 0; i < total; i++ {
-		items[i] = testItem(tmrand.Bytes(tmhash.Size))
+		items[i] = testItem(grand.Bytes(hashFn.Size()))
 	}
 
-	rootHash1 := HashFromByteSlicesIterative(items)
-	rootHash2 := HashFromByteSlices(items)
+	rootHash1 := HashFromByteSlicesIterative(hashFn, items)
+	rootHash2 := HashFromByteSlices(hashFn, items)
 	require.Equal(t, rootHash1, rootHash2, "Unmatched root hashes: %X vs %X", rootHash1, rootHash2)
 }
 
 func BenchmarkHashAlternatives(b *testing.B) {
+	hashFn := crypto.SHA256
+
 	total := 100
 
 	items := make([][]byte, total)
 	for i := 0; i < total; i++ {
-		items[i] = testItem(tmrand.Bytes(tmhash.Size))
+		items[i] = testItem(grand.Bytes(hashFn.Size()))
 	}
 
 	b.ResetTimer()
 	b.Run("recursive", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			_ = HashFromByteSlices(items)
+			_ = HashFromByteSlices(hashFn, items)
 		}
 	})
 
 	b.Run("iterative", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			_ = HashFromByteSlicesIterative(items)
+			_ = HashFromByteSlicesIterative(hashFn, items)
 		}
 	})
 }

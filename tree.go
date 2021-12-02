@@ -1,28 +1,28 @@
 package merkle
 
 import (
-	"crypto/sha256"
+	"crypto"
 	"hash"
 	"math/bits"
 )
 
 // HashFromByteSlices computes a Merkle tree where the leaves are the byte slice,
 // in the provided order. It follows RFC-6962.
-func HashFromByteSlices(items [][]byte) []byte {
-	return hashFromByteSlices(sha256.New(), items)
+func HashFromByteSlices(hashFn crypto.Hash, items [][]byte) []byte {
+	return hashFromByteSlices(hashFn, hashFn.New(), items)
 }
 
-func hashFromByteSlices(sha hash.Hash, items [][]byte) []byte {
+func hashFromByteSlices(hashFn crypto.Hash, hash hash.Hash, items [][]byte) []byte {
 	switch len(items) {
 	case 0:
-		return emptyHash()
+		return emptyHash(hashFn)
 	case 1:
-		return leafHashOpt(sha, items[0])
+		return leafHashOpt(hash, items[0])
 	default:
 		k := getSplitPoint(int64(len(items)))
-		left := hashFromByteSlices(sha, items[:k])
-		right := hashFromByteSlices(sha, items[k:])
-		return innerHashOpt(sha, left, right)
+		left := hashFromByteSlices(hashFn, hash, items[:k])
+		right := hashFromByteSlices(hashFn, hash, items[k:])
+		return innerHashOpt(hash, left, right)
 	}
 }
 
@@ -65,18 +65,18 @@ func hashFromByteSlices(sha hash.Hash, items [][]byte) []byte {
 // Finally, considering that the recursive implementation is easier to
 // read, it might not be worthwhile to switch to a less intuitive
 // implementation for so little benefit.
-func HashFromByteSlicesIterative(input [][]byte) []byte {
+func HashFromByteSlicesIterative(hashFn crypto.Hash, input [][]byte) []byte {
 	items := make([][]byte, len(input))
-	sha := sha256.New()
+	hash := hashFn.New()
 	for i, leaf := range input {
-		items[i] = leafHash(leaf)
+		items[i] = leafHash(hashFn, leaf)
 	}
 
 	size := len(items)
 	for {
 		switch size {
 		case 0:
-			return emptyHash()
+			return emptyHash(hashFn)
 		case 1:
 			return items[0]
 		default:
@@ -84,7 +84,7 @@ func HashFromByteSlicesIterative(input [][]byte) []byte {
 			wp := 0 // write position
 			for rp < size {
 				if rp+1 < size {
-					items[wp] = innerHashOpt(sha, items[rp], items[rp+1])
+					items[wp] = innerHashOpt(hash, items[rp], items[rp+1])
 					rp += 2
 				} else {
 					items[wp] = items[rp]

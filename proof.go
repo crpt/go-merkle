@@ -2,11 +2,11 @@ package merkle
 
 import (
 	"bytes"
+	"crypto"
 	"errors"
 	"fmt"
 
-	"github.com/tendermint/tendermint/crypto/tmhash"
-	tmcrypto "github.com/tendermint/tendermint/proto/tendermint/crypto"
+	aceitypes "github.com/daotl/go-acei/types"
 )
 
 const (
@@ -24,16 +24,17 @@ const (
 // everything.  This also affects the generalized proof system as
 // well.
 type Proof struct {
-	Total    int64    `json:"total"`     // Total number of items.
-	Index    int64    `json:"index"`     // Index of item to prove.
-	LeafHash []byte   `json:"leaf_hash"` // Hash of item value.
-	Aunts    [][]byte `json:"aunts"`     // Hashes from leaf's sibling to a root's child.
+	Total    int64       `json:"total"`     // Total number of items.
+	Index    int64       `json:"index"`     // Index of item to prove.
+	LeafHash []byte      `json:"leaf_hash"` // Hash of item value.
+	Aunts    [][]byte    `json:"aunts"`     // Hashes from leaf's sibling to a root's child.
+	HashType crypto.Hash `json:"hash_type"` // Hash type as defined in the `crypto` package.
 }
 
 // ProofsFromByteSlices computes inclusion proof for given items.
 // proofs[0] is the proof for items[0].
-func ProofsFromByteSlices(items [][]byte) (rootHash []byte, proofs []*Proof) {
-	trails, rootSPN := trailsFromByteSlices(items)
+func ProofsFromByteSlices(hashFn crypto.Hash, items [][]byte) (rootHash []byte, proofs []*Proof) {
+	trails, rootSPN := trailsFromByteSlices(hashFn, items)
 	rootHash = rootSPN.Hash
 	proofs = make([]*Proof, len(items))
 	for i, trail := range trails {
@@ -42,6 +43,7 @@ func ProofsFromByteSlices(items [][]byte) (rootHash []byte, proofs []*Proof) {
 			Index:    int64(i),
 			LeafHash: trail.Hash,
 			Aunts:    trail.FlattenAunts(),
+			HashType: hashFn,
 		}
 	}
 	return
@@ -56,7 +58,7 @@ func (sp *Proof) Verify(rootHash []byte, leaf []byte) error {
 	if sp.Index < 0 {
 		return errors.New("proof index cannot be negative")
 	}
-	leafHash := leafHash(leaf)
+	leafHash := leafHash(sp.HashType, leaf)
 	if !bytes.Equal(sp.LeafHash, leafHash) {
 		return fmt.Errorf("invalid leaf hash: wanted %X got %X", leafHash, sp.LeafHash)
 	}
@@ -70,6 +72,7 @@ func (sp *Proof) Verify(rootHash []byte, leaf []byte) error {
 // Compute the root hash given a leaf hash.  Does not verify the result.
 func (sp *Proof) ComputeRootHash() []byte {
 	return computeHashFromAunts(
+		sp.HashType,
 		sp.Index,
 		sp.Total,
 		sp.LeafHash,
@@ -93,7 +96,7 @@ func (sp *Proof) StringIndented(indent string) string {
 }
 
 // ValidateBasic performs basic validation.
-// NOTE: it expects the LeafHash and the elements of Aunts to be of size tmhash.Size,
+// NOTE: it expects the LeafHash and the elements of Aunts to be of size hashSize,
 // and it expects at most MaxAunts elements in Aunts.
 func (sp *Proof) ValidateBasic() error {
 	if sp.Total < 0 {
@@ -102,35 +105,40 @@ func (sp *Proof) ValidateBasic() error {
 	if sp.Index < 0 {
 		return errors.New("negative Index")
 	}
-	if len(sp.LeafHash) != tmhash.Size {
-		return fmt.Errorf("expected LeafHash size to be %d, got %d", tmhash.Size, len(sp.LeafHash))
+	if sp.HashType == 0 {
+		return errors.New("HashType not specified")
+	}
+	hashSize := sp.HashType.Size()
+	if len(sp.LeafHash) != hashSize {
+		return fmt.Errorf("expected LeafHash size to be %d, got %d", hashSize, len(sp.LeafHash))
 	}
 	if len(sp.Aunts) > MaxAunts {
 		return fmt.Errorf("expected no more than %d aunts, got %d", MaxAunts, len(sp.Aunts))
 	}
 	for i, auntHash := range sp.Aunts {
-		if len(auntHash) != tmhash.Size {
-			return fmt.Errorf("expected Aunts#%d size to be %d, got %d", i, tmhash.Size, len(auntHash))
+		if len(auntHash) != hashSize {
+			return fmt.Errorf("expected Aunts#%d size to be %d, got %d", i, hashSize, len(auntHash))
 		}
 	}
 	return nil
 }
 
-func (sp *Proof) ToProto() *tmcrypto.Proof {
+func (sp *Proof) ToProto() *aceitypes.Proof {
 	if sp == nil {
 		return nil
 	}
-	pb := new(tmcrypto.Proof)
+	pb := new(aceitypes.Proof)
 
 	pb.Total = sp.Total
 	pb.Index = sp.Index
 	pb.LeafHash = sp.LeafHash
 	pb.Aunts = sp.Aunts
+	pb.HashType = uint32(sp.HashType)
 
 	return pb
 }
 
-func ProofFromProto(pb *tmcrypto.Proof) (*Proof, error) {
+func ProofFromProto(pb *aceitypes.Proof) (*Proof, error) {
 	if pb == nil {
 		return nil, errors.New("nil proof")
 	}
@@ -141,6 +149,7 @@ func ProofFromProto(pb *tmcrypto.Proof) (*Proof, error) {
 	sp.Index = pb.Index
 	sp.LeafHash = pb.LeafHash
 	sp.Aunts = pb.Aunts
+	sp.HashType = crypto.Hash(pb.HashType)
 
 	return sp, sp.ValidateBasic()
 }
@@ -148,7 +157,8 @@ func ProofFromProto(pb *tmcrypto.Proof) (*Proof, error) {
 // Use the leafHash and innerHashes to get the root merkle hash.
 // If the length of the innerHashes slice isn't exactly correct, the result is nil.
 // Recursive impl.
-func computeHashFromAunts(index, total int64, leafHash []byte, innerHashes [][]byte) []byte {
+func computeHashFromAunts(hashFn crypto.Hash, index, total int64, leafHash []byte, innerHashes [][]byte,
+) []byte {
 	if index >= total || index < 0 || total <= 0 {
 		return nil
 	}
@@ -166,17 +176,17 @@ func computeHashFromAunts(index, total int64, leafHash []byte, innerHashes [][]b
 		}
 		numLeft := getSplitPoint(total)
 		if index < numLeft {
-			leftHash := computeHashFromAunts(index, numLeft, leafHash, innerHashes[:len(innerHashes)-1])
+			leftHash := computeHashFromAunts(hashFn, index, numLeft, leafHash, innerHashes[:len(innerHashes)-1])
 			if leftHash == nil {
 				return nil
 			}
-			return innerHash(leftHash, innerHashes[len(innerHashes)-1])
+			return innerHash(hashFn, leftHash, innerHashes[len(innerHashes)-1])
 		}
-		rightHash := computeHashFromAunts(index-numLeft, total-numLeft, leafHash, innerHashes[:len(innerHashes)-1])
+		rightHash := computeHashFromAunts(hashFn, index-numLeft, total-numLeft, leafHash, innerHashes[:len(innerHashes)-1])
 		if rightHash == nil {
 			return nil
 		}
-		return innerHash(innerHashes[len(innerHashes)-1], rightHash)
+		return innerHash(hashFn, innerHashes[len(innerHashes)-1], rightHash)
 	}
 }
 
@@ -216,19 +226,19 @@ func (spn *ProofNode) FlattenAunts() [][]byte {
 
 // trails[0].Hash is the leaf hash for items[0].
 // trails[i].Parent.Parent....Parent == root for all i.
-func trailsFromByteSlices(items [][]byte) (trails []*ProofNode, root *ProofNode) {
+func trailsFromByteSlices(hashFn crypto.Hash, items [][]byte) (trails []*ProofNode, root *ProofNode) {
 	// Recursive impl.
 	switch len(items) {
 	case 0:
-		return []*ProofNode{}, &ProofNode{emptyHash(), nil, nil, nil}
+		return []*ProofNode{}, &ProofNode{emptyHash(hashFn), nil, nil, nil}
 	case 1:
-		trail := &ProofNode{leafHash(items[0]), nil, nil, nil}
+		trail := &ProofNode{leafHash(hashFn, items[0]), nil, nil, nil}
 		return []*ProofNode{trail}, trail
 	default:
 		k := getSplitPoint(int64(len(items)))
-		lefts, leftRoot := trailsFromByteSlices(items[:k])
-		rights, rightRoot := trailsFromByteSlices(items[k:])
-		rootHash := innerHash(leftRoot.Hash, rightRoot.Hash)
+		lefts, leftRoot := trailsFromByteSlices(hashFn, items[:k])
+		rights, rightRoot := trailsFromByteSlices(hashFn, items[k:])
+		rootHash := innerHash(hashFn, leftRoot.Hash, rightRoot.Hash)
 		root := &ProofNode{rootHash, nil, nil, nil}
 		leftRoot.Parent = root
 		leftRoot.Right = rightRoot

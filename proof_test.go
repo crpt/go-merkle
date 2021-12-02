@@ -1,6 +1,7 @@
 package merkle
 
 import (
+	"crypto"
 	"errors"
 	"fmt"
 	"testing"
@@ -8,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	tmcrypto "github.com/tendermint/tendermint/proto/tendermint/crypto"
+	aceitypes "github.com/daotl/go-acei/types"
 )
 
 const ProofOpDomino = "test:domino"
@@ -29,8 +30,8 @@ func NewDominoOp(key, input, output string) DominoOp {
 	}
 }
 
-func (dop DominoOp) ProofOp() tmcrypto.ProofOp {
-	dopb := tmcrypto.DominoOp{
+func (dop DominoOp) ProofOp() aceitypes.ProofOp {
+	dopb := aceitypes.DominoOp{
 		Key:    dop.key,
 		Input:  dop.Input,
 		Output: dop.Output,
@@ -40,7 +41,7 @@ func (dop DominoOp) ProofOp() tmcrypto.ProofOp {
 		panic(err)
 	}
 
-	return tmcrypto.ProofOp{
+	return aceitypes.ProofOp{
 		Type: ProofOpDomino,
 		Key:  []byte(dop.key),
 		Data: bz,
@@ -157,7 +158,7 @@ func TestProofValidateBasic(t *testing.T) {
 	for _, tc := range testCases {
 		tc := tc
 		t.Run(tc.testName, func(t *testing.T) {
-			_, proofs := ProofsFromByteSlices([][]byte{
+			_, proofs := ProofsFromByteSlices(crypto.SHA256, [][]byte{
 				[]byte("apple"),
 				[]byte("watermelon"),
 				[]byte("kiwi"),
@@ -171,7 +172,7 @@ func TestProofValidateBasic(t *testing.T) {
 	}
 }
 func TestVoteProtobuf(t *testing.T) {
-	_, proofs := ProofsFromByteSlices([][]byte{
+	_, proofs := ProofsFromByteSlices(crypto.SHA256, [][]byte{
 		[]byte("apple"),
 		[]byte("watermelon"),
 		[]byte("kiwi"),
